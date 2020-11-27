@@ -1,3 +1,4 @@
+from collections import defaultdict 
 
 class DB:
 
@@ -49,9 +50,13 @@ class DB:
 				print(name)
 			elif name == "W":
 				assert len(args) == 3
+
+				print("transaction to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
 				self.write(args[0], args[1], int(args[2]))
 			elif name == "end":
 				assert len(args) == 1
+
+				print("transaction to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
 				print(name)
 			elif name == "fail":
 				assert len(args) == 1
@@ -103,10 +108,67 @@ class DB:
 				self.waiting.append(self.Instruction("write", [transaction, var, value]))
 				self.waits_for.append((transaction, response)) # first waits for second
 
+
+		############# DEADLOCK SESSION ###############
+		# TODO: create a dead lock detector class
+		def isCyclicUtil(self, graph, v, visited, recStack):
+			visited[v] = True
+			recStack[v] = True
+
+			for neighbour in graph[v]:
+				if visited[neighbour] == False:
+					if self.isCyclicUtil(graph, neighbour, visited, recStack) == True:
+						return True
+				elif recStack[neighbour] == True:
+					return True
+
+			recStack[v] = False
+			return False
+
+		# return the transaction to be aborted if there is a cycle or 
+		# none if there is no cycle
+		def isCyclic(self, graph, num_of_vertices):
+			visited = [False] * (num_of_vertices + 1)
+			recStack = [False] * (num_of_vertices + 1)
+			for node in range(1, num_of_vertices + 1):
+				if visited[node] == False:
+					if self.isCyclicUtil(graph, node, visited, recStack) == True:
+						# find the youngest transaction to abort
+						# print("recStack: ", recStack)
+						max_start_time = 0
+						result = None
+						for i, val in enumerate(recStack):
+							if val == False:
+								continue
+							transaction = "T" + str(i)
+							if self.start_time[transaction] > max_start_time:
+								max_start_time = self.start_time[transaction]
+								result = transaction
+
+						return result
+			return None
+
+
 		# Detect if there is a deadlock
 		# input: a list of wait-for edges
 		# output: transaction to be aborted
-		# def deadlock_detect():
+		def deadlock_detect(self):
+			# construct adjlist 
+			graph = defaultdict(list)
+			vertices = set() # each transaction is a vertex
+			for edge in self.waits_for:
+				node1 = int(edge[0][1:])
+				node2 = int(edge[1][1:])
+				graph[node1].append(node2) # only use transaction's number
+				vertices.add(node1)
+				vertices.add(node2)
+
+			return self.isCyclic(graph, len(vertices))
+
+
+		################### END ########################
+		
+
 
 
 		def print_state(self):
@@ -179,7 +241,7 @@ class DB:
 	# def dump():
 
 	def querystate(self):
-		print("Transaction Manager State:")
+		print("\nTransaction Manager State:")
 		self.tm.print_state()
 		# print("Sites: ")
 		# for s in self.sites:
