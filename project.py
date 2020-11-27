@@ -23,14 +23,14 @@ class DB:
 			self.is_read_only = [False] * (self.num_of_sites + 1)
 			self.waiting = [] # accumulate waiting command
 			self.waits_for = [] # wait-for edges, used for deadlock detection
-			self.accessed_sites = {} # key: transaction, value: list of sites it has accessed
+			self.accessed_sites = {} # key: transaction, value: list of sites a transaction has accessed
 
 
 
 		def read_in_instruction(self, line):
 			# increment time
 			self.curr_time += 1
-			print(self.curr_time)
+			# print(self.curr_time)
 
 			# parse instruction
 			l = line.index("(")
@@ -49,7 +49,7 @@ class DB:
 				print(name)
 			elif name == "W":
 				assert len(args) == 3
-				self.write(args[0], args[1], args[2])
+				self.write(args[0], args[1], int(args[2]))
 			elif name == "end":
 				assert len(args) == 1
 				print(name)
@@ -87,51 +87,78 @@ class DB:
 			print("	site to access: ", site_to_access)
 
 			# send write rquest to each site
-			# for site in site_to_access:
-			# 	response = self.sites[site].write(x_idx, value)
+			success = True
+			for site in site_to_access:
+				response = self.sites[site].write(transaction, var, value)
 
-			# 	if response == false:
-					# wait - add to waiting instruction, update wait for graph 
+				if response != "success":
+					success = False
+					break
+				else:
+					print("write %s = %d to site %d succeeded" %(var, value, site))
 
+			if success == False:
+				print("%s waits for %s" %(transaction, response))
+				# wait - add to waiting instruction, update wait for graph
+				self.waiting.append(self.Instruction("write", [transaction, var, value]))
+				self.waits_for.append((transaction, response)) # first waits for second
+
+		# Detect if there is a deadlock
+		# input: a list of wait-for edges
+		# output: transaction to be aborted
 		# def deadlock_detect():
 
 
 		def print_state(self):
 			print("start time: ", self.start_time)
 			print("status: ", self.status)
-			print("is read only: ", self.is_read_only)
+			# print("is read only: ", self.is_read_only)
+			print("waiting instruction: ", self.waiting)
+
+			print("Sites:")
+			for i in range(1, self.num_of_sites + 1):
+				print("site %d: " % i)
+				self.sites[i].print_state()
 
 	
+
 		# inner class of TM
+		class Instruction:
+			def __init__(self, type, args):
+				self.type = type
+				self.args = args
+
+			def __repr__(self):
+				return "%s(%s)" % (self.type, self.args)
+
+			def __str__(self):
+				return "%s(%s)" % (self.type, self.args)
+
 		class DM:
+
+			RLOCK = 0
+			WLOCK = 1
 
 			def __init__(self):
 				self.num_of_var = 20
 				self.curr_vals = {} # is a map: has key means try to write to it, when site is down, erase its value but leave the key. 
 				self.commit_vals = [(x * 10, 0) for x in range(self.num_of_var + 1)]
-				self.lock_table = {}
+				self.lock_table = {} # key: variable ("x1") value: (lock, transaction) 0 - read lock 1 - write lock, (todo: shared lock)
 
-			def write(self, x, val):
-				return True
+			def write(self, transaction, x, val):
+				if x in self.lock_table:
+					return self.lock_table[x][1] # transaction that holds the lock
+
+				self.lock_table[x] = (self.WLOCK, transaction)
+				self.curr_vals[x] = val
+				return "success"
 			
 			def print_state(self):
-				print("commit values: ", self.commit_vals)
+				print("    curr_vals: ", self.curr_vals)
+				# print("	   commit values: ", self.commit_vals)
+				print("    lock table: ", self.lock_table)
 		# initialize variables' values
 		# def initialize():
-
-	# read a line from input file and determine what command it is
-	# def read_in(line):
-
-
-	# def begin(transaction, time):
-		# just record its begin time
-
-	# return the value
-	# def read(transaction, val):
-
-	# def read_only(transaction, var):
-
-	# def write(transaction, var, value):
 
 	# return commit or abort
 	# def end(t):
