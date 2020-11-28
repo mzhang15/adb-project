@@ -19,11 +19,13 @@ class DB:
 			self.num_of_sites = 10
 			self.sites = [self.DM(i) for i in range(self.num_of_sites + 1)]
 
+			# TODO: create Transaction class and create a list of transactions
+			# all of the following information should be stored inside the transaction
 			self.curr_time = 0
-			self.start_time = {} # dictionary with key = transaction no, value = start time
+			self.start_time = {} # dictionary with key = transaction, value = start time
 			self.end_time = {}
 			self.status = [self.UP for x in range(self.num_of_sites + 1)] # 0 - down 1 - up normally 2 - just recovered
-			self.is_read_only = [False] * (self.num_of_sites + 1)
+			self.is_read_only = {} # key: transaction, value: True/False
 			self.waiting = [] # accumulate waiting command
 			self.waits_for = [] # wait-for edges, used for deadlock detection
 			self.accessed_sites = {} # key: transaction, value: list of sites a transaction has accessed
@@ -42,6 +44,7 @@ class DB:
 			name = line[0:l]
 			args = line[l + 1:r].split(",")
 
+			print(name, args)
 			if name == "begin": 
 				assert len(args) == 1
 				self.begin(args[0], self.curr_time)
@@ -50,7 +53,7 @@ class DB:
 				self.beginRO(args[0], self.curr_time)
 			elif name == "R":
 				assert len(args) == 2
-				print(name)
+				self.read(args[0], args[1])
 			elif name == "W":
 				assert len(args) == 3
 
@@ -77,19 +80,20 @@ class DB:
 				self.dump()
 			else:
 				print("Error: unknown command ", name)
-				
+
 
 		def begin(self, transaction, time):
 			# just record its begin time
 			self.start_time[transaction] = time
+			self.is_read_only[transaction] = False
 
 		def beginRO(self, transaction, time):
 			self.start_time[transaction] = time
-			t_idx = int(transaction[1:])
-			self.is_read_only[t_idx] = True
+			self.is_read_only[transaction] = True
 
-		def write(self, transaction, var, value):
-			# distribute it to sites
+		# based on variable, return which sites have its copy
+		# output: a list of site numbers
+		def get_sites_to_access(self, var):
 			site_to_access = []
 			x_idx = int(var[1:])
 			if x_idx % 2 == 1:
@@ -97,7 +101,12 @@ class DB:
 			else:
 				for i in range(1, self.num_of_sites + 1):
 					site_to_access.append(i)
+			return site_to_access
 			# print("	site to access: ", site_to_access)
+
+		def write(self, transaction, var, value):
+			# distribute it to sites
+			site_to_access = self.get_sites_to_access(var)
 
 			# send write rquest to each site
 			success = True
@@ -107,8 +116,8 @@ class DB:
 				if response != "success":
 					success = False
 					break
-				# else:
-					# print("write %s = %d to site %d succeeded" %(var, value, site))
+				else:
+					print("write %s = %d to site %d succeeded" %(var, value, site))
 
 			if success == False:
 				# print("%s waits for %s" %(transaction, response))
@@ -118,6 +127,33 @@ class DB:
 				return False
 
 			return True
+
+		# TODO:
+		def read(self, transaction, var):
+			# read-only: return committed value on or before the transaction started
+			if self.is_read_only[transaction] == True:
+				assert transaction in self.start_time
+				begin_time = self.start_time[transaction]
+
+				site_to_access = self.get_sites_to_access(var)
+				print("site to access: ", site_to_access)
+				print(begin_time)
+
+				for site in site_to_access:
+					result = self.sites[site].read_only(var, begin_time)
+					# print(result)
+
+					if result != None:
+						print("%s: %d" % (var, result))
+						return
+				return
+
+			# normal read
+			# odd vs even variable
+			# odd: read from a site; even: try site one by one, return first 
+			site_to_access = self.get_sites_to_access(var)
+
+			return
 
 		def release_locks(self, t):
 			for i in range(1, self.num_of_sites + 1):
@@ -248,7 +284,7 @@ class DB:
 		def print_state(self):
 			print("start time: ", self.start_time)
 			print("status: ", self.status)
-			# print("is read only: ", self.is_read_only)
+			print("is read only: ", self.is_read_only)
 			print("waiting instruction: ", self.waiting)
 
 			print("Sites:")
@@ -279,14 +315,14 @@ class DB:
 				self.number = site_no
 				self.num_of_var = 20
 				self.curr_vals = {} # is a map: has key means try to write to it, when site is down, erase its value but leave the key. 
-				self.commit_vals = {}  # key: variable ("x1") value: pair of val and commit time 
+				self.commit_vals = defaultdict(list)  # dictionary of list(sorted by time) - key: variable ("x1") value: a list of pairs of val and commit time 
 				self.lock_table = {} # key: variable ("x1") value: (lock, transaction) 0 - read lock 1 - write lock, (todo: shared lock)
 
 				# initialize commit_vals
 				for i in range(1, self.num_of_var + 1):
 					if i % 2 == 0 or i % 10 + 1 == self.number:
 						var = "x" + str(i)
-						self.commit_vals[var] = (i * 10, 0)
+						self.commit_vals[var].append((i * 10, 0))
 
 			def write(self, transaction, x, val):
 				if x in self.lock_table:
@@ -295,6 +331,17 @@ class DB:
 				self.lock_table[x] = (self.WLOCK, transaction)
 				self.curr_vals[x] = val
 				return "success"
+
+			def read_only(self, var, begin_time):
+				history = self.commit_vals[var]
+				print("history: ", history)
+
+				# return the lastest val: last val in the list whose commit time is < begin_time
+				for i in range(len(history)):
+					if history[i][1] < begin_time:
+						if i == len(history) - 1 or history[i + 1][1] > begin_time:
+							return history[i][0]
+				return None
 			
 			def print_state(self):
 				print("    curr_vals: ", self.curr_vals)
@@ -309,13 +356,13 @@ class DB:
 
 			def commit_values(self, time):
 				for variable, val in self.curr_vals.items():
-					self.commit_vals[variable] = (val, time)
+					self.commit_vals[variable].append((val, time))
 
 				self.curr_vals.clear()
 
 			def print_commit_vals(self):
-				for var, (val, time) in self.commit_vals.items():
-					print ("%s: %d," % (var, val), end = " ")
+				for var in self.commit_vals:
+					print ("%s: %d," % (var, self.commit_vals[var][-1][0]), end = " ")
 				print("\n")
 
 		# initialize variables' values
