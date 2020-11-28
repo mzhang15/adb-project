@@ -1,4 +1,5 @@
 from collections import defaultdict 
+from test_cases import tests_generator
 
 class DB:
 
@@ -338,15 +339,24 @@ class DB:
 
 def main():
 	# create a DB
-	db = DB()
 
 	# read a file line by line
-	f = open("input.txt", "r")
-	for line in f:
-		db.tm.read_in_instruction(line)
+	# f = open("input.txt", "r")
+	# for line in f:
+	# 	db.tm.read_in_instruction(line)
+	# db.querystate()
 
-	db.querystate()
+	relevant_tests = set([1])
 
+	for test_index_zero_based, (test_lines, lines_with_comments) in enumerate(tests_generator()):
+
+		test_num = test_index_zero_based+1
+		if test_num in relevant_tests:
+			print(f'Test num {test_num}')
+			db = DB()
+			for line in test_lines:
+				db.tm.read_in_instruction(line)
+			db.querystate()
 
 if __name__ == "__main__":
     main()
