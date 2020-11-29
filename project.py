@@ -30,6 +30,8 @@ class DB:
 			self.accessed_sites = defaultdict(list) # key: transaction, value: list of sites a transaction has accessed
 			self.transaction_status = {} # either 1 - commit or 0 - abort
 
+			self.write_to = defaultdict(list) # key: transaction, value: list of variables it writes to
+
 
 
 		def read_in_instruction(self, line):
@@ -106,6 +108,8 @@ class DB:
 		# handle write instruction
 		# Output: True - means succeeded, False - means failed, should wait
 		def write(self, transaction, var, value):
+			self.write_to[transaction].append(var)
+
 			# distribute it to sites
 			site_to_access = self.get_sites_to_access(var)
 
@@ -166,6 +170,7 @@ class DB:
 			# odd: read from a site; even: try site one by one, return first 
 			site_to_access = self.get_sites_to_access(var)
 
+			print("site to access: ", site_to_access)
 			for site in site_to_access:
 				result = self.sites[site].read(transaction, var)
 				if result != "fail" and type(result) is int:
@@ -207,7 +212,7 @@ class DB:
 
 			# check if all sites t has accessed can commit, which means assign curr_vals to commit_vals
 			# (may not need to do this since we already abort the transaction in fail instruction)
-			if t in self.transaction_status and self.transaction_status[t] == self.ABORT: # abort
+			if t in self.transaction_status and self.transaction_status[t] == self.ABORT: # already aborted
 				print("%s aborts" % t)
 				return
 			
@@ -215,8 +220,20 @@ class DB:
 			print("%s commits" % t)
 
 			# commit values: assign curr_vals to commit_vals
-			for i in range(1, self.num_of_sites + 1):
-				self.sites[i].commit_values(self.curr_time)
+			self.commit_values(t)
+
+		# commit values that transaction has written to
+		def commit_values(self, transaction):
+			# site_to_access = set()
+			var_been_written = self.write_to[transaction]
+
+			for var in var_been_written:
+				# site_to_access.update(self.get_sites_to_access(var))
+				site_to_access = self.get_sites_to_access(var)
+
+				for site in site_to_access:
+					self.sites[site].commit_value(var, self.curr_time)
+
 
 		def dump(self):
 			for i in range(1, self.num_of_sites + 1):
@@ -360,6 +377,7 @@ class DB:
 			DOWN = 0
 			UP = 1
 			RECOVER = 2
+
 			# TODO: creat lock class and acqure and release method
 			class LOCK:
 				def __init__(self, type, transaction):
@@ -384,13 +402,17 @@ class DB:
 				self.commit_vals = defaultdict(list)  # dictionary of list(sorted by time) - key: variable ("x1") value: a list of pairs of val and commit time 
 				self.lock_table = {} # key: variable ("x1") value: (lock, transaction) 0 - read lock 1 - write lock, (todo: shared lock)
 				self.waiting_list = defaultdict(list) # waiting to acquire locks on var: key - var, value - list of Lock(type, transactionn)
+				self.is_just_recovered = {} # key - var, value - true/false (used only for even variables)
 
-				# initialize commit_vals and curr_vals
+				# initialize commit_vals, curr_vals, and is_recovered
 				for i in range(1, self.num_of_var + 1):
 					if i % 2 == 0 or i % 10 + 1 == self.number:
 						var = "x" + str(i)
 						self.commit_vals[var].append((i * 10, 0))
 						self.curr_vals[var] = i * 10
+
+						if i % 2 == 0:
+							self.is_just_recovered[var] = False
 
 			def fail(self):
 				self.status = self.DOWN
@@ -399,6 +421,9 @@ class DB:
 
 			def recover(self):
 				self.status = self.RECOVER
+
+				for var in self.is_just_recovered:
+					self.is_just_recovered[var] = True
 
 
 
@@ -456,11 +481,26 @@ class DB:
 						if i == len(history) - 1 or history[i + 1][1] > begin_time:
 							return history[i][0]
 
-			# Output: "fail" - site is down or just recovered, value - if succeeded, or list of conflicting transactions
+			# handle recover cases
+			# Output: "fail" - site is down or var just recovered, value - if succeeded, or list of conflicting transactions
 			def read(self, transaction, var):
-				if self.status == self.DOWN or self.status == self.RECOVER:
+				if self.status == self.DOWN:
 					return "fail"
 
+				if self.status == self.RECOVER:
+					x_idx = int(var[1:])
+					if x_idx % 2 == 1: # odd variable(unreplicated) can be read directly
+						return self.read_helper(transaction, var)
+					
+					if self.is_just_recovered[var] == True:
+						return "fail"
+
+					return self.read_helper(transaction, var)
+
+				return self.read_helper(transaction, var)
+
+
+			def read_helper(self, transaction, var):
 				if var not in self.lock_table: # no lock on var -> acqure RLOCK
 					self.lock_table[var] = (self.LOCK(self.RLOCK, transaction))
 
@@ -503,6 +543,7 @@ class DB:
 				print("    curr_vals: ", self.curr_vals)
 				# print("	   commit values: ", self.commit_vals)
 				print("    lock table: ", self.lock_table)
+				print("    is just recovered: ", self.is_just_recovered)
 
 
 			def release_locks(self, transaction):
@@ -520,11 +561,42 @@ class DB:
 					if transaction in lock.transactions and lock.type == self.WLOCK:
 						self.curr_vals[var] = self.commit_vals[var][-1][0]
 
+			# commit a specific variable at time t 
+			def commit_value(self, var, time):
+				self.commit_vals[var].append((self.curr_vals[var], time))
+				self.curr_vals.pop(var) # Q: do i need to clear the curr value?
+
+				if var in self.is_just_recovered and self.is_just_recovered[var] == True:
+					self.is_just_recovered[var] = False
+
+				# if all replicated variables have a commit after the site recovers -> change site's status to UP
+				is_all_variables_recovered = True
+				for var, status in self.is_just_recovered.items():
+					if status == True:
+						is_all_variables_recovered = False
+						break
+				if is_all_variables_recovered:
+					self.status = self.UP
+
+			# no longer use
 			def commit_values(self, time):
 				for variable, val in self.curr_vals.items():
 					self.commit_vals[variable].append((val, time))
 
+					# handle recover case
+					if variable in self.is_just_recovered and self.is_just_recovered[variable] == True:
+						self.is_just_recovered[variable] == False;
+
 				self.curr_vals.clear()
+
+				# if all replicated variables have a commit after the site recovers -> change site's status to UP
+				is_all_variables_recovered = True
+				for var, status in self.is_just_recovered.items():
+					if status == True:
+						is_all_variables_recovered = False
+						break
+				if is_all_variables_recovered:
+					self.status = self.UP
 
 			def print_commit_vals(self):
 				for var in self.commit_vals:
