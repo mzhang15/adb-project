@@ -9,9 +9,9 @@ class DB:
 	class TM:
 		
 		# status constants
-		DOWN = 0
-		UP = 1
-		RECOVER = 2
+		# DOWN = 0
+		# UP = 1
+		# RECOVER = 2
 		COMMIT = 1
 		ABORT = 0
 
@@ -25,11 +25,10 @@ class DB:
 			self.curr_time = 0
 			self.start_time = {} # dictionary with key = transaction, value = start time
 			self.end_time = {}
-			self.status = [self.UP for x in range(self.num_of_sites + 1)] # 0 - down 1 - up normally 2 - just recovered
 			self.is_read_only = {} # key: transaction, value: True/False
 			self.waiting = [] # accumulate waiting command
 			self.waits_for = [] # wait-for edges, used for deadlock detection
-			self.accessed_sites = {} # key: transaction, value: list of sites a transaction has accessed
+			self.accessed_sites = defaultdict(list) # key: transaction, value: list of sites a transaction has accessed
 			self.transaction_status = {} # either 1 - commit or 0 - abort
 
 
@@ -73,10 +72,10 @@ class DB:
 				self.end(args[0])
 			elif name == "fail":
 				assert len(args) == 1
-				print(name)
+				self.fail(args[0])
 			elif name == "recover":
 				assert len(args) == 1
-				print(name)
+				self.recover(args[0])
 			elif name == "dump":
 				self.dump()
 			else:
@@ -92,7 +91,7 @@ class DB:
 			self.start_time[transaction] = time
 			self.is_read_only[transaction] = True
 
-		# based on variable, return which sites have its copy
+		# based on variable, return sites that have its copy
 		# output: a list of site numbers
 		def get_sites_to_access(self, var):
 			site_to_access = []
@@ -105,31 +104,39 @@ class DB:
 			return site_to_access
 			# print("	site to access: ", site_to_access)
 
+		# handle write instruction
+		# Output: True - means succeeded, False - means failed, should wait
 		def write(self, transaction, var, value):
 			# distribute it to sites
 			site_to_access = self.get_sites_to_access(var)
 
 			# send write rquest to each site
-			success = True
+			is_waiting = False
 			for site in site_to_access:
 				response = self.sites[site].write(transaction, var, value)
 
-				if response != "success":
-					success = False
-					break
-				else:
+				if response == "success":
 					print("write %s = %d to site %d succeeded" %(var, value, site))
+					self.accessed_sites[transaction].append(site)
+				elif response == "fail":
+					print("site %s is down, unable to write" % site)
+				else:
+					is_waiting = True
+					break
+					
 
-			if success == False:
+			if is_waiting == True:
 				# print("%s waits for %s" %(transaction, response))
 				# wait - add to waiting instruction, update wait for graph
+				# TODO: release locks
 				self.waiting.append(self.Instruction("write", [transaction, var, value]))
-				self.waits_for.append((transaction, response)) # first waits for second
+				for t in response:
+					self.waits_for.append((transaction, t)) # first waits for second
 				return False
 
 			return True
 
-		# TODO:
+		# TODO: to handle normal read
 		def read(self, transaction, var):
 			# read-only: return committed value on or before the transaction started
 			if self.is_read_only[transaction] == True:
@@ -144,20 +151,54 @@ class DB:
 					result = self.sites[site].read_only(var, begin_time)
 					# print(result)
 
-					if result != None:
+					if result == "fail":
+						print("site %d is down, cannot read" % site)
+					elif result != None:
 						print("%s: %d" % (var, result))
-						return
-				return
+						self.accessed_sites[transaction].append(site)
+						return True
+
+				# all sites failed
+				self.waiting.append(Instruction('read_only', [transaction, var]))
+				return False
 
 			# normal read
 			# odd vs even variable
 			# odd: read from a site; even: try site one by one, return first 
 			site_to_access = self.get_sites_to_access(var)
 
-			return
+			for site in site_to_access:
+				result = self.sites[site].read(transaction, var)
+				if result != "fail" and type(result) is int:
+					print("%s: %d" % (var, result))
+					self.accessed_sites[transaction].append(site)
+					return True
+
+			# all sites failed, then T must wait
+			self.waiting.append(self.Instruction('read', [transaction, var]))
+			print(result)
+			assert type(result) is list
+			for t in result:
+				self.waits_for.append(transaction, t)
+			return False
+
+		def fail(self, site):
+			site = int(site)
+			# erase lock table + curr_vals?
+			self.sites[site].fail()
+		
+			# check if a transactionn has accessed this site, if so, abort it right away
+			for t in self.accessed_sites:
+				if site in self.accessed_sites[t]:
+					self.abort(t)
+					# self.transaction_status[t] = self.ABORT
+					# TODO: should revert all commands
+
+		def recover(self, site):
+			self.sites[int(site)].recover()
 
 		def release_locks(self, t):
-			for i in range(1, self.num_of_sites + 1):
+			for i in self.accessed_sites[t]:
 				self.sites[i].release_locks(t)
 
 		# return commit or abort
@@ -203,8 +244,14 @@ class DB:
 			elif command.type == "read":
 				assert len(command.args) == 2
 
+		def revert_to_last_commit_val(self, transaction):
+			for site in self.accessed_sites[transaction]:
+				self.sites[site].revert_to_last_commit_value(transaction)
+
 		# Description: abort a transaction, release all locks it's holding, remove its waiting commands, and remove related waits-for edge
 		def abort(self, transaction):
+			# revert back to last commit value
+			self.revert_to_last_commit_val(transaction)
 			# release locks
 			self.release_locks(transaction) 
 
@@ -284,7 +331,6 @@ class DB:
 
 		def print_state(self):
 			print("start time: ", self.start_time)
-			print("status: ", self.status)
 			print("is read only: ", self.is_read_only)
 			print("waiting instruction: ", self.waiting)
 
@@ -312,28 +358,96 @@ class DB:
 			RLOCK = 0
 			WLOCK = 1
 
+			DOWN = 0
+			UP = 1
+			RECOVER = 2
+			# TODO: creat lock class and acqure and release method
+			class LOCK:
+				def __init__(self, type, transaction):
+					self.type = type
+					self.transactions = set() # set: transactions holding the lock
+
+					self.transactions.add(transaction)
+
+				# def acqure(self, transaction):
+				# 	if self.type == WLOCK:
+				# 		if not self.transactions:
+				# 			self.transactions.add(transaction)
+				# 			return True
+				# 		return False
+				# 	elif self.type == RLOCK:
+
 			def __init__(self, site_no):
 				self.number = site_no
+				self.status = self.UP
 				self.num_of_var = 20
 				self.curr_vals = {} # is a map: has key means try to write to it, when site is down, erase its value but leave the key. 
 				self.commit_vals = defaultdict(list)  # dictionary of list(sorted by time) - key: variable ("x1") value: a list of pairs of val and commit time 
 				self.lock_table = {} # key: variable ("x1") value: (lock, transaction) 0 - read lock 1 - write lock, (todo: shared lock)
+				self.waiting_list = defaultdict(list) # waiting to acquire locks on var: key - var, value - list of Lock(type, transactionn)
 
-				# initialize commit_vals
+				# initialize commit_vals and curr_vals
 				for i in range(1, self.num_of_var + 1):
 					if i % 2 == 0 or i % 10 + 1 == self.number:
 						var = "x" + str(i)
 						self.commit_vals[var].append((i * 10, 0))
+						self.curr_vals[var] = i * 10
 
+			def fail(self):
+				self.status = self.DOWN
+				self.lock_table.clear()
+				self.waiting_list.clear()
+
+			def recover(self):
+				self.status = self.RECOVER
+
+
+
+			# handle write request
+			# TODO: change site's status from recover to up after a successful write
+			# Output: "fail" - site is down, "success" - write succeeded, or list of conflictinng transaction
 			def write(self, transaction, x, val):
-				if x in self.lock_table:
-					return self.lock_table[x][1] # transaction that holds the lock
+				# if site is up or recovered, write request can proceed
+				if self.status == self.DOWN:
+					return "fail"
 
-				self.lock_table[x] = (self.WLOCK, transaction)
+				if x in self.lock_table:
+					# if it's the same transaction and hold a write lock, then can proceed
+					# else return the conflicting transaction
+					if transaction in self.lock_table[x].transactions: # lock held by same transaction
+						if self.lock_table[x].type == self.WLOCK: # hold a write lock already
+							self.curr_vals[x] = val
+							return "success"
+						# hold a read lock
+						if len(self.lock_table[x].transactions) == 1: # not a shared lock
+							# promote lock and proceed
+							self.lock_table[x].type = self.WLOCK
+							self.curr_vals[x] = val
+							return "success"
+
+						# a shared read lock -> need to wait
+						self.waiting_list[var].append(self.LOCK(self.WLOCK, transaction))
+						conflict_transactions = []
+						for t in self.lock_table[x].transactions:
+							if t != transaction:
+								conflict_transactions.append(t)
+						return conflict_transactions
+
+					# other transactions holding a lock on x
+					self.waiting_list[var].append(self.LOCK(self.WLOCK, transaction))
+					conflict_transactions = self.lock_table[var].transactions
+					return conflict_transactions # transaction that holds the lock
+
+				# no lock on x
+				self.lock_table[x] = self.LOCK(self.WLOCK, transaction)
 				self.curr_vals[x] = val
 				return "success"
 
+			# Output: "fail" - site is down or just recovered, value - if succeeded (guranteed to return one)
 			def read_only(self, var, begin_time):
+				if self.status == self.DOWN or self.status == self.RECOVER:
+					return "fail"
+
 				history = self.commit_vals[var]
 				print("history: ", history)
 
@@ -342,18 +456,70 @@ class DB:
 					if history[i][1] < begin_time:
 						if i == len(history) - 1 or history[i + 1][1] > begin_time:
 							return history[i][0]
-				return None
+
+			# Output: "fail" - site is down or just recovered, value - if succeeded, or list of conflicting transactions
+			def read(self, transaction, var):
+				if self.status == self.DOWN or self.status == self.RECOVER:
+					return "fail"
+
+				if var not in self.lock_table: # no lock on var -> acqure RLOCK
+					self.lock_table[var] = (self.LOCK(self.RLOCK, transaction))
+
+					# TODO: curr_val don't have this key
+					return self.curr_vals[var]
+
+				conflict_transactions = []
+
+				# there is a lock on var
+				if self.lock_table[var].type == self.WLOCK:
+					# check if it's same transaction, if so proceed
+					if self.lock_table[var].transactions[0] == transaction:
+						return self.curr_vals[var]
+					# write lock on var held by different transaction
+					conflict_transactions.append(self.lock_table[var].transactions[0])
+					self.waiting_list[var].append(self.LOCK(self.RLOCK, transaction))
+					
+					# TODO: Q: iterate through all waiting lock and figure out conflicts?
+					return conflict_transactions # return the conflicting transaction
+
+				# there is a read lock on var
+				if transaction in self.lock_table[var].transactions: # already held the read lock
+					return self.curr_vals[var]
+
+				# read lock held by others
+				if not self.waiting_list[var]: # no waiting locks
+					self.lock_table[var].transactions.add(transaction) # acquire shared read lock on var
+					return self.curr_vals[var]
+
+				# there are waiting locks
+				self.waiting_list[var].append(self.LOCK(self.RLOCK, transaction))
+				conflict_transactions.extend(self.lock_table[var].transactions)
+				# Q: do i need to lock all waiting locks to add conflicts?
+
+				return conflict_transactions
+
 			
 			def print_state(self):
+				print("    status: ", self.status)
 				print("    curr_vals: ", self.curr_vals)
 				# print("	   commit values: ", self.commit_vals)
 				print("    lock table: ", self.lock_table)
 
 
 			def release_locks(self, transaction):
-				for key, value in self.lock_table.copy().items():
-					if value[1] == transaction:
-						self.lock_table.pop(key)
+				# release locks
+				for var, lock in self.lock_table.copy().items():
+					if transaction in lock.transactions:
+						self.lock_table[var].transactions.remove(transaction)
+						if not self.lock_table[var].transactions: # empty
+							self.lock_table.pop(var)
+				# todo: update waiting_list
+
+
+			def revert_to_last_commit_value(self, transaction):
+				for var, lock in self.lock_table.items():
+					if transaction in lock.transactions and lock.type == self.WLOCK:
+						self.curr_vals[var] = self.commit_vals[var][-1][0]
 
 			def commit_values(self, time):
 				for variable, val in self.curr_vals.items():
