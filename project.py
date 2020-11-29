@@ -1,5 +1,6 @@
 from collections import defaultdict 
 from test_cases import tests_generator
+from deadlock_detect_util import build_graph, find_all_cycles
 
 class DB:
 
@@ -58,17 +59,18 @@ class DB:
 			elif name == "W":
 				assert len(args) == 3
 
-				print("transaction to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
+				print("transactions to be aborted HHH: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
 				self.write(args[0], args[1], int(args[2]))
 			elif name == "end":
 				assert len(args) == 1
 
 				# deadlock detection
-				t_abort = self.deadlock_detect()
-				print("transaction to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
-				if t_abort != None:
-					self.abort(t_abort)
-					self.retry()
+				to_abort_transactions = self.deadlock_detect()
+				for t_abort in to_abort_transactions:
+					print("transaction to be aborted HH: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
+					if t_abort != None:
+						self.abort(t_abort)
+				self.retry()
 
 				self.end(args[0])
 			elif name == "fail":
@@ -220,45 +222,13 @@ class DB:
 
 			self.transaction_status[transaction] = self.ABORT # 0 means abort
 
-		############# DEADLOCK SESSION ###############
-		# TODO: create a dead lock detector class
-		def isCyclicUtil(self, graph, v, visited, recStack):
-			visited[v] = True
-			recStack[v] = True
-
-			for neighbour in graph[v]:
-				if visited[neighbour] == False:
-					if self.isCyclicUtil(graph, neighbour, visited, recStack) == True:
-						return True
-				elif recStack[neighbour] == True:
-					return True
-
-			recStack[v] = False
-			return False
-
-		# return the transaction to be aborted if there is a cycle or 
-		# none if there is no cycle
-		def isCyclic(self, graph, num_of_vertices):
-			visited = [False] * (num_of_vertices + 1)
-			recStack = [False] * (num_of_vertices + 1)
-			for node in range(1, num_of_vertices + 1):
-				if visited[node] == False:
-					if self.isCyclicUtil(graph, node, visited, recStack) == True:
-						# find the youngest transaction to abort
-						# print("recStack: ", recStack)
-						max_start_time = 0
-						result = None
-						for i, val in enumerate(recStack):
-							if val == False:
-								continue
-							transaction = "T" + str(i)
-							if self.start_time[transaction] > max_start_time:
-								max_start_time = self.start_time[transaction]
-								result = transaction
-
-						return result
-			return None
-
+		# todo doesnt need to be instance method
+		def _youngest_transaction_from_ids(self, transaction_numbers):
+			transactions_named = ['T'+str(x) for x in transaction_numbers]
+			ts_w_start_times = [(t_id, self.start_time[t_id]) for t_id in transactions_named]
+			sorted_ts = sorted(ts_w_start_times, key=lambda x: x[1], reverse=True)
+			youngest = sorted_ts[0][0]
+			return youngest
 
 		# Detect if there is a deadlock
 		# input: a list of wait-for edges
@@ -274,11 +244,13 @@ class DB:
 				vertices.add(node1)
 				vertices.add(node2)
 
-			return self.isCyclic(graph, len(vertices))
-
-
-		################### END ########################
-		
+			found_cycles = find_all_cycles(graph)
+			# found_cycles is a list of lists; kill youngest from each cycle (each sublist)
+			youngest_from_each_cycle = []
+			for cycle in found_cycles:
+				youngest_in_cycle = self._youngest_transaction_from_ids(cycle)
+				youngest_from_each_cycle.append(youngest_in_cycle)
+			return youngest_from_each_cycle
 
 
 
