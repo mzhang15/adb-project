@@ -170,10 +170,12 @@ class DB:
 				result = self.sites[site].read(transaction, var)
 				if result != "fail" and type(result) is int:
 					print("%s: %d" % (var, result))
+					self.accessed_sites[transaction].append(site)
 					return True
 
 			# all sites failed, then T must wait
-			self.waiting.append(Instruction('read', [transaction, var]))
+			self.waiting.append(self.Instruction('read', [transaction, var]))
+			print(result)
 			assert type(result) is list
 			for t in result:
 				self.waits_for.append(transaction, t)
@@ -186,14 +188,16 @@ class DB:
 		
 			# check if a transactionn has accessed this site, if so, abort it right away
 			for t in self.accessed_sites:
-				if site in accessed_sites[t]:
-					self.transaction_status[t] = self.ABORT
+				if site in self.accessed_sites[t]:
+					self.abort(t)
+					# self.transaction_status[t] = self.ABORT
+					# TODO: should revert all commands
 
 		def recover(self, site):
 			self.sites[int(site)].recover()
 
 		def release_locks(self, t):
-			for i in range(1, self.num_of_sites + 1):
+			for i in self.accessed_sites[t]:
 				self.sites[i].release_locks(t)
 
 		# return commit or abort
@@ -239,8 +243,14 @@ class DB:
 			elif command.type == "read":
 				assert len(command.args) == 2
 
+		def revert_to_last_commit_val(self, transaction):
+			for site in self.accessed_sites[transaction]:
+				self.sites[site].revert_to_last_commit_value(transaction)
+
 		# Description: abort a transaction, release all locks it's holding, remove its waiting commands, and remove related waits-for edge
 		def abort(self, transaction):
+			# revert back to last commit value
+			self.revert_to_last_commit_val(transaction)
 			# release locks
 			self.release_locks(transaction) 
 
@@ -502,8 +512,13 @@ class DB:
 						self.lock_table[var].transactions.remove(transaction)
 						if not self.lock_table[var].transactions: # empty
 							self.lock_table.pop(var)
-
 				# todo: update waiting_list
+
+
+			def revert_to_last_commit_value(self, transaction):
+				for var, lock in self.lock_table.items():
+					if transaction in lock.transactions and lock.type == self.WLOCK:
+						self.curr_vals[var] = self.commit_vals[var][-1][0]
 
 			def commit_values(self, time):
 				for variable, val in self.curr_vals.items():
