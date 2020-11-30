@@ -526,32 +526,49 @@ class DB:
 							self.curr_vals[x] = val
 							return "success"
 						# hold a read lock
-						if len(self.lock_table[x].transactions) == 1: # not a shared lock
+						if not self.waiting_list[x] and len(self.lock_table[x].transactions) == 1: # not a shared lock
 							# promote lock and proceed
 							self.lock_table[x].type = self.WLOCK
 							self.curr_vals[x] = val
 							return "success"
 
-						# a shared read lock -> need to wait
-						self.waiting_list[x].append(self.LOCK(self.WLOCK, transaction))
+						# there are waiting locks and/or a shared read lock -> need to wait
+
 						conflict_transactions = []
+						# infer conflict from waiting list
+						conflict_transactions.extend(self.infer_conflicts_from_waiting_locks(x))
+
+						# infer conflict from shared read lock
 						for t in self.lock_table[x].transactions:
 							if t != transaction:
 								conflict_transactions.append(t)
 						# print("%s must waits for %s" % (transaction, conflict_transactions))
+
+						self.waiting_list[x].append(self.LOCK(self.WLOCK, transaction))
+
 						return conflict_transactions
 
 					# other transactions holding a lock on x
+					# infer conflict from waiting list
+					conflict_transactions = self.infer_conflicts_from_waiting_locks(x)
+					conflict_transactions.extend(self.lock_table[x].transactions)
+					# print("%s must waits for %s" % (transaction, conflict_transactions))
+
 					self.waiting_list[x].append(self.LOCK(self.WLOCK, transaction))
 					# print("lock waiting list: ", self.waiting_list)
-					conflict_transactions = list(self.lock_table[x].transactions)
-					# print("%s must waits for %s" % (transaction, conflict_transactions))
+
 					return conflict_transactions # transaction that holds the lock
 
 				# no lock on x
 				self.lock_table[x] = self.LOCK(self.WLOCK, transaction)
 				self.curr_vals[x] = val
 				return "success"
+
+			def infer_conflicts_from_waiting_locks(self, var):
+				conflict_transactions = []
+				for lock in self.waiting_list[var]:
+					conflict_transactions.extend(lock.transactions)
+				return conflict_transactions
 
 			# Output: "fail" - site is down or just recovered, value - if succeeded (guranteed to return one)
 			def read_only(self, var, begin_time):
