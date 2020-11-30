@@ -58,7 +58,12 @@ class DB:
 			elif name == "W":
 				assert len(args) == 3
 
-				print("transaction to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
+				t_abort = self.deadlock_detect()
+				print("transaction to be aborted: ", t_abort) # deadlock detectionn happens at the beginning of the tick
+				if t_abort != None:
+					self.abort(t_abort)
+					self.retry()
+
 				self.write(args[0], args[1], int(args[2]))
 			elif name == "end":
 				assert len(args) == 1
@@ -66,11 +71,16 @@ class DB:
 				# deadlock detection
 				t_abort = self.deadlock_detect()
 				print("transaction to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
+				print("wait for edges before abort: ", self.waits_for)
 				if t_abort != None:
 					self.abort(t_abort)
+					print("wait for edges after abort: ", self.waits_for)
 					self.retry()
 
-				self.end(args[0])
+				self.end(args[0]) # 
+
+				# retry waiting commands
+				self.retry()
 			elif name == "fail":
 				assert len(args) == 1
 				self.fail(args[0])
@@ -116,7 +126,9 @@ class DB:
 			# send write rquest to each site
 			is_waiting = False
 			for site in site_to_access:
+				print("lock table before write: ", self.sites[site].lock_table)
 				response = self.sites[site].write(transaction, var, value)
+				print("lock table after write: ", self.sites[site].lock_table)
 
 				if response == "success":
 					print("write %s = %d to site %d succeeded" %(var, value, site))
@@ -132,9 +144,20 @@ class DB:
 				# print("%s waits for %s" %(transaction, response))
 				# wait - add to waiting instruction, update wait for graph
 				# TODO: release locks
-				self.waiting.append(self.Instruction("write", [transaction, var, value]))
-				for t in response:
-					self.waits_for.append((transaction, t)) # first waits for second
+
+				# because could retry command, so only add different command
+				is_existed = False
+				for command in self.waiting:
+					if command.type == "write" and command.args == [transaction, var, value]:
+						is_existed = True
+						break
+
+				if not is_existed:
+					self.waiting.append(self.Instruction("write", [transaction, var, value]))
+					assert type(response) is list
+					print("%s should wait for %s" % (transaction, response))
+					for t in response:
+						self.waits_for.append((transaction, t)) # first waits for second
 				return False
 
 			return True
@@ -180,10 +203,10 @@ class DB:
 
 			# all sites failed, then T must wait
 			self.waiting.append(self.Instruction('read', [transaction, var]))
-			print(result)
 			assert type(result) is list
+			print("%s should wait for %s" % (transaction, result))
 			for t in result:
-				self.waits_for.append(transaction, t)
+				self.waits_for.append((transaction, t))
 			return False
 
 		def fail(self, site):
@@ -205,7 +228,7 @@ class DB:
 			for i in self.accessed_sites[t]:
 				self.sites[i].release_locks(t)
 
-		# return commit or abort
+		# print commit or abort
 		def end(self, t):
 			# release locks
 			self.release_locks(t)
@@ -221,6 +244,13 @@ class DB:
 
 			# commit values: assign curr_vals to commit_vals
 			self.commit_values(t)
+
+			# updates waits-for edges: delete any edge that has other transactions wait for this transaction
+			# Assumption: this transaction shouldnn't wait for any other transaction when it commits
+			for edge in self.waits_for:
+				assert edge[0] != t
+				if edge[1] == t:
+					self.waits_for.remove(edge)
 
 		# commit values that transaction has written to
 		def commit_values(self, transaction):
@@ -245,20 +275,51 @@ class DB:
 		# function: retry waiting commands recursivly
 		# when to use: when lock table is changed (locks are released or erased), 
 		def retry(self):
+			print("waiting command: ", self.waiting)
 			if len(self.waiting) == 0:
 				return
 
-			command = self.waiting[0]
-			if command.type == "write":
-				assert len(command.args) == 3
-				result = self.write(command.args[0], command.args[1], command.args[2])
-				if result == True:
-					# update waiting command
-					self.waiting.pop(0)
-					# retry next command
-					self.retry()
-			elif command.type == "read":
-				assert len(command.args) == 2
+			# determine which transaction's commands to try first: the one that doesn't wait for anyone
+			print("    waits for: ", self.waits_for)
+			adjlist = defaultdict(list)
+			for edge in self.waits_for:
+				adjlist[edge[0]].append(edge[1])
+				adjlist[edge[1]] = []
+			transaction_to_try = None
+			for key in adjlist:
+				if not adjlist[key]: # empty
+					transaction_to_try = key
+					break
+			print("transaction to try: ", transaction_to_try)
+
+			commands_to_try = []
+			if transaction_to_try is None: # only left with transactions that aren't waiting for any
+				commands_to_try = self.waiting
+			else:
+				for command in self.waiting:
+					if command.args[0] == transaction_to_try:
+						commands_to_try.append(command)
+
+			print("commands to try: ", commands_to_try)
+
+
+			for command in commands_to_try:
+				print("retry %s" % command)
+				if command.type == "write":
+					assert len(command.args) == 3
+					result = self.write(command.args[0], command.args[1], command.args[2])
+					print("retry result: ", result)
+					if result == True:
+						# update waiting command
+						self.waiting.remove(command)
+						# retry next command
+						self.retry()
+				elif command.type == "read":
+					assert len(command.args) == 2
+					result = self.read(command.args[0], command.args[1])
+					if result == True:
+						self.waiting.remove(command)
+						self.retry()
 
 		def revert_to_last_commit_val(self, transaction):
 			for site in self.accessed_sites[transaction]:
@@ -277,7 +338,7 @@ class DB:
 					self.waiting.remove(command)
 
 			# remove related waits-for edges
-			for edge in self.waits_for:
+			for edge in self.waits_for.copy(): # when deleting elements in the list during the loop, size could change, so use copy
 				if edge[0] == transaction or edge[1] == transaction:
 					self.waits_for.remove(edge)
 
@@ -301,17 +362,22 @@ class DB:
 
 		# return the transaction to be aborted if there is a cycle or 
 		# none if there is no cycle
-		def isCyclic(self, graph, num_of_vertices):
-			visited = [False] * (num_of_vertices + 1)
-			recStack = [False] * (num_of_vertices + 1)
-			for node in range(1, num_of_vertices + 1):
+		def isCyclic(self, graph, vertices):
+			visited = {}
+			recStack = {}
+
+			for v in vertices:
+				visited[v] = False
+				recStack[v] = False
+
+			for node in vertices:
 				if visited[node] == False:
 					if self.isCyclicUtil(graph, node, visited, recStack) == True:
 						# find the youngest transaction to abort
 						# print("recStack: ", recStack)
 						max_start_time = 0
 						result = None
-						for i, val in enumerate(recStack):
+						for i, val in recStack.items():
 							if val == False:
 								continue
 							transaction = "T" + str(i)
@@ -337,7 +403,9 @@ class DB:
 				vertices.add(node1)
 				vertices.add(node2)
 
-			return self.isCyclic(graph, len(vertices))
+			print("graph:", graph)
+			print("num of vertices: ", vertices)
+			return self.isCyclic(graph, vertices)
 
 
 		################### END ########################
@@ -393,6 +461,11 @@ class DB:
 				# 			return True
 				# 		return False
 				# 	elif self.type == RLOCK:
+				def __repr__(self):
+					return "%s(%s)" % (self.type, self.transactions)
+
+				def __str__(self):
+					return "%s(%s)" % (self.type, self.transactions)
 
 			def __init__(self, site_no):
 				self.number = site_no
@@ -400,7 +473,7 @@ class DB:
 				self.num_of_var = 20
 				self.curr_vals = {} # is a map: has key means try to write to it, when site is down, erase its value but leave the key. 
 				self.commit_vals = defaultdict(list)  # dictionary of list(sorted by time) - key: variable ("x1") value: a list of pairs of val and commit time 
-				self.lock_table = {} # key: variable ("x1") value: (lock, transaction) 0 - read lock 1 - write lock, (todo: shared lock)
+				self.lock_table = {} # key: variable ("x1") value: lock(type, transaction) 0 - read lock 1 - write lock, (todo: shared lock)
 				self.waiting_list = defaultdict(list) # waiting to acquire locks on var: key - var, value - list of Lock(type, transactionn)
 				self.is_just_recovered = {} # key - var, value - true/false (used only for even variables)
 
@@ -450,16 +523,19 @@ class DB:
 							return "success"
 
 						# a shared read lock -> need to wait
-						self.waiting_list[var].append(self.LOCK(self.WLOCK, transaction))
+						self.waiting_list[x].append(self.LOCK(self.WLOCK, transaction))
 						conflict_transactions = []
 						for t in self.lock_table[x].transactions:
 							if t != transaction:
 								conflict_transactions.append(t)
+						# print("%s must waits for %s" % (transaction, conflict_transactions))
 						return conflict_transactions
 
 					# other transactions holding a lock on x
-					self.waiting_list[var].append(self.LOCK(self.WLOCK, transaction))
-					conflict_transactions = self.lock_table[var].transactions
+					self.waiting_list[x].append(self.LOCK(self.WLOCK, transaction))
+					# print("lock waiting list: ", self.waiting_list)
+					conflict_transactions = list(self.lock_table[x].transactions)
+					# print("%s must waits for %s" % (transaction, conflict_transactions))
 					return conflict_transactions # transaction that holds the lock
 
 				# no lock on x
@@ -512,10 +588,10 @@ class DB:
 				# there is a lock on var
 				if self.lock_table[var].type == self.WLOCK:
 					# check if it's same transaction, if so proceed
-					if self.lock_table[var].transactions[0] == transaction:
+					if transaction in self.lock_table[var].transactions:
 						return self.curr_vals[var]
 					# write lock on var held by different transaction
-					conflict_transactions.append(self.lock_table[var].transactions[0])
+					conflict_transactions.extend(self.lock_table[var].transactions)
 					self.waiting_list[var].append(self.LOCK(self.RLOCK, transaction))
 					
 					# TODO: Q: iterate through all waiting lock and figure out conflicts?
@@ -564,7 +640,7 @@ class DB:
 			# commit a specific variable at time t 
 			def commit_value(self, var, time):
 				self.commit_vals[var].append((self.curr_vals[var], time))
-				self.curr_vals.pop(var) # Q: do i need to clear the curr value?
+				# self.curr_vals.pop(var) # Q: do i need to clear the curr value?
 
 				if var in self.is_just_recovered and self.is_just_recovered[var] == True:
 					self.is_just_recovered[var] = False
