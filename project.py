@@ -194,19 +194,24 @@ class DB:
 			site_to_access = self.get_sites_to_access(var)
 
 			print("site to access: ", site_to_access)
+			needs_wait = False
 			for site in site_to_access:
 				result = self.sites[site].read(transaction, var)
 				if result != "fail" and type(result) is int:
 					print("%s: %d" % (var, result))
 					self.accessed_sites[transaction].append(site)
 					return True
+				if type(result) is list: # return a list of conflicting transactions
+					needs_wait = True
+					break
 
-			# all sites failed, then T must wait
+			# all sites return fail or one of site return list of conflicting transaction, then T must wait
 			self.waiting.append(self.Instruction('read', [transaction, var]))
-			assert type(result) is list
-			print("%s should wait for %s" % (transaction, result))
-			for t in result:
-				self.waits_for.append((transaction, t))
+			if needs_wait == True:
+				assert type(result) is list
+				print("%s should wait for %s" % (transaction, result))
+				for t in result:
+					self.waits_for.append((transaction, t))
 			return False
 
 		def fail(self, site):
