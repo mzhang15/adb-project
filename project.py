@@ -71,8 +71,8 @@ class DB:
 				# deadlock detection
 				t_abort = self.deadlock_detect()
 				print("transaction to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
-				print("wait for edges before abort: ", self.waits_for)
 				if t_abort != None:
+					print("wait for edges before abort: ", self.waits_for)
 					self.abort(t_abort)
 					print("wait for edges after abort: ", self.waits_for)
 					self.retry()
@@ -237,6 +237,10 @@ class DB:
 			# (may not need to do this since we already abort the transaction in fail instruction)
 			if t in self.transaction_status and self.transaction_status[t] == self.ABORT: # already aborted
 				print("%s aborts" % t)
+				# delete its waiting command
+				for c in self.waiting:
+					if c.args[0] == t:
+						self.waiting.remove(c)
 				return
 			
 			self.transaction_status[t] = self.COMMIT # commit
@@ -280,24 +284,25 @@ class DB:
 				return
 
 			# determine which transaction's commands to try first: the one that doesn't wait for anyone
+			# Q: should I find all transactions that could try?
 			print("    waits for: ", self.waits_for)
 			adjlist = defaultdict(list)
 			for edge in self.waits_for:
 				adjlist[edge[0]].append(edge[1])
 				adjlist[edge[1]] = []
-			transaction_to_try = None
+
+			transactions_to_try = []
 			for key in adjlist:
 				if not adjlist[key]: # empty
-					transaction_to_try = key
-					break
-			print("transaction to try: ", transaction_to_try)
+					transactions_to_try.append(key)
+			print("transactions to try: ", transactions_to_try)
 
 			commands_to_try = []
-			if transaction_to_try is None: # only left with transactions that aren't waiting for any
+			if not transactions_to_try: # only left with transactions that aren't waiting for any
 				commands_to_try = self.waiting
 			else:
 				for command in self.waiting:
-					if command.args[0] == transaction_to_try:
+					if command.args[0] in transactions_to_try:
 						commands_to_try.append(command)
 
 			print("commands to try: ", commands_to_try)
