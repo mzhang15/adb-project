@@ -1,4 +1,5 @@
 from collections import defaultdict 
+import sys
 
 class DB:
 
@@ -192,7 +193,7 @@ class DB:
 					if result == "fail":
 						print("site %d is down, cannot read" % site)
 					elif result != None:
-						print("%s: %d" % (var, result))
+						print("%s - %s: %d" % (transaction, var, result))
 						self.accessed_sites[transaction].append(site)
 						return True
 
@@ -210,7 +211,7 @@ class DB:
 			for site in site_to_access:
 				result = self.sites[site].read(transaction, var)
 				if result != "fail" and type(result) is int:
-					print("%s: %d" % (var, result))
+					print("%s - %s: %d" % (transaction, var, result))
 					self.accessed_sites[transaction].append(site)
 					return True
 				if type(result) is list: # return a list of conflicting transactions
@@ -383,6 +384,9 @@ class DB:
 			self.transaction_status[transaction] = self.ABORT # 0 means abort
 
 		############# DEADLOCK SESSION ###############
+		# The algorithm and code are cited from website GeeksforGeeks: Dectect Cycle in a Directed Graph
+		# link to the page is https://www.geeksforgeeks.org/detect-cycle-in-a-graph/
+
 		# TODO: create a dead lock detector class
 		def isCyclicUtil(self, graph, v, visited, recStack):
 			visited[v] = True
@@ -769,11 +773,13 @@ class DB:
 
 
 def main():
+	in_file = sys.argv[1]
+	# out_file = sys.argv[2]
 	# create a DB
 	db = DB()
 
 	# read a file line by line
-	f = open("input21.txt", "r")
+	f = open(in_file, "r")
 	for line in f:
 		db.tm.read_in_instruction(line)
 
