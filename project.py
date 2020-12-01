@@ -9,8 +9,8 @@ class DB:
 	class TM:
 		
 		# status constants
-		# DOWN = 0
-		# UP = 1
+		DOWN = 0
+		UP = 1
 		# RECOVER = 2
 		COMMIT = 1
 		ABORT = 0
@@ -34,7 +34,13 @@ class DB:
 			self.transaction_status = {} # either 1 - commit or 0 - abort
 
 			self.write_to = defaultdict(list) # key: transaction, value: list of variables it writes to
+			# self.sites_down_history = [[] for i in range(1, self.num_of_sites + 1)]
+			# self.sites_recover_history = [[] for i range(1, self.num_of_sites + 1)]
+			self.sites_status_history = [[] for i in range(self.num_of_sites + 1)] # list of list of pairs (time, up/down)
 
+			# initialize sites_status_history
+			for site in range(1, self.num_of_sites + 1):
+				self.sites_status_history[site].append((self.curr_time, self.UP))
 
 
 		def read_in_instruction(self, line):
@@ -175,7 +181,6 @@ class DB:
 
 			return True
 
-		# TODO: to handle normal read
 		def read(self, transaction, var):
 			# read-only: return committed value on or before the transaction started
 			if self.is_read_only[transaction] == True:
@@ -187,7 +192,7 @@ class DB:
 				print(begin_time)
 
 				for site in site_to_access:
-					result = self.sites[site].read_only(var, begin_time)
+					result = self.sites[site].read_only(var, begin_time, self.sites_status_history[site])
 					# print(result)
 
 					if result == "fail":
@@ -198,7 +203,7 @@ class DB:
 						return True
 
 				# all sites failed
-				self.waiting.append(Instruction('read_only', [transaction, var]))
+				self.waiting.append(self.Instruction('read_only', [transaction, var]))
 				return False
 
 			# normal read
@@ -231,6 +236,7 @@ class DB:
 			site = int(site)
 			# erase lock table + curr_vals?
 			self.sites[site].fail()
+			self.sites_status_history[site].append((self.curr_time, self.DOWN))
 		
 			# check if a transactionn has accessed this site, if so, abort it right away
 			for t in self.accessed_sites:
@@ -241,6 +247,7 @@ class DB:
 
 		def recover(self, site):
 			self.sites[int(site)].recover()
+			self.sites_status_history[int(site)].append((self.curr_time, self.UP))
 
 		def release_locks(self, t):
 			for i in self.accessed_sites[t]:
@@ -618,19 +625,63 @@ class DB:
 					conflict_transactions.extend(lock.transactions)
 				return conflict_transactions
 
-			# Output: "fail" - site is down or just recovered, value - if succeeded (guranteed to return one)
-			def read_only(self, var, begin_time):
-				if self.status == self.DOWN or self.status == self.RECOVER:
+			# Input: transaction begin time, site status history
+			# Output: "fail" - site is down or no valid value, value - if succeeded (guranteed to return one)
+			def read_only(self, var, begin_time, site_status_history):
+				x_idx = int(var[1:])
+
+				if x_idx % 2 == 1: # unreplicated variable
+					# check if site is up at begin_time: find the last time < begin_time 
+					status_at_begin_time = None
+					for time, status in reversed(site_status_history):
+						if time < begin_time:
+							status_at_begin_time = status
+							break
+
+					assert status_at_begin_time != None # initialize site is up at time 0
+					if status_at_begin_time == self.DOWN:
+						return "fail"
+
+					# site was up -> Q: read the lastest value or curr value?
+					return self.curr_vals[var]
+
+				if x_idx % 2 == 0: # replicated variable
+					history = self.commit_vals[var]
+					print("    history: ", history)
+
+					# find the lastest commit before begin_time
+					latest_commit = None
+					for commit in reversed(history): 
+						if commit[1] < begin_time:
+							latest_commit = commit
+							break
+					assert latest_commit != None
+
+					latest_commit_time = latest_commit[1]
+					latest_commit_value = latest_commit[0]
+
+					# check if the site is up between latest_commit_time and begin_time
+					# in other words, no down history in this history
+					is_up_all_time = True
+					for time, status in site_status_history:
+						if latest_commit_time < time and time < begin_time and status == self.DOWN:
+							is_up_all_time = False
+							break
+					if is_up_all_time == True:
+						return latest_commit_value
 					return "fail"
 
-				history = self.commit_vals[var]
-				print("history: ", history)
+				# if self.status == self.DOWN:
+				# 	return "fail"
 
-				# return the lastest val: last val in the list whose commit time is < begin_time
-				for i in range(len(history)):
-					if history[i][1] < begin_time:
-						if i == len(history) - 1 or history[i + 1][1] > begin_time:
-							return history[i][0]
+				# history = self.commit_vals[var]
+				# print("history: ", history)
+
+				# # return the lastest val: last val in the list whose commit time is < begin_time
+				# for i in range(len(history)):
+				# 	if history[i][1] < begin_time:
+				# 		if i == len(history) - 1 or history[i + 1][1] > begin_time:
+				# 			return history[i][0]
 
 			# handle recover cases
 			# Output: "fail" - site is down or var just recovered, value - if succeeded, or list of conflicting transactions
