@@ -29,6 +29,7 @@ class DB:
 			self.waits_for = [] # wait-for edges, used for deadlock detection
 			# TODO: change accessed_sites to be a dict of dict: outerkey - transaction innerkey: var value: list of sites a var has accessed
 			self.accessed_sites = defaultdict(list) # key: transaction, value: list of sites a transaction has accessed
+			self.accessed_sites2 = {} # key - transaction value - dict of key - var value - sites it writes to 
 			self.transaction_status = {} # either 1 - commit or 0 - abort
 
 			self.write_to = defaultdict(list) # key: transaction, value: list of variables it writes to
@@ -63,11 +64,12 @@ class DB:
 			elif name == "W":
 				assert len(args) == 3
 
-				t_abort = self.deadlock_detect()
-				print("transaction to be aborted: ", t_abort) # deadlock detectionn happens at the beginning of the tick
-				if t_abort != None:
-					self.abort(t_abort)
-					self.retry()
+				# no need to run deadlock detection before write
+				# t_abort = self.deadlock_detect()
+				# print("transaction to be aborted: ", t_abort) # deadlock detectionn happens at the beginning of the tick
+				# if t_abort != None:
+				# 	self.abort(t_abort)
+				# 	self.retry()
 
 				self.write(args[0], args[1], int(args[2]))
 			elif name == "end":
@@ -125,6 +127,10 @@ class DB:
 		def write(self, transaction, var, value):
 			self.write_to[transaction].append(var)
 
+			# create a dictionary to remember those sites that a write request writes to
+			if transaction not in self.accessed_sites2:
+				self.accessed_sites2[transaction] = defaultdict(list)
+
 			# distribute it to sites
 			site_to_access = self.get_sites_to_access(var)
 
@@ -138,6 +144,7 @@ class DB:
 				if response == "success":
 					print("write %s = %d to site %d succeeded" %(var, value, site))
 					self.accessed_sites[transaction].append(site)
+					self.accessed_sites2[transaction][var].append(site)
 				elif response == "fail":
 					print("site %s is down, unable to write" % site)
 				else:
@@ -272,8 +279,8 @@ class DB:
 			var_been_written = self.write_to[transaction]
 
 			for var in var_been_written:
-				# site_to_access.update(self.get_sites_to_access(var))
-				sites_to_commit = self.get_sites_to_access(var)
+				# sites_to_commit = self.get_sites_to_access(var)
+				sites_to_commit = self.accessed_sites2[transaction][var]
 
 				# filter out those sites that weren't accessed by this transaction
 				# for site in sites_to_commit.copy():
@@ -766,7 +773,7 @@ def main():
 	db = DB()
 
 	# read a file line by line
-	f = open("input.txt", "r")
+	f = open("input21.txt", "r")
 	for line in f:
 		db.tm.read_in_instruction(line)
 
