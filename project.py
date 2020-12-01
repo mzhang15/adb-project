@@ -1,6 +1,8 @@
 from collections import defaultdict 
 import sys
 
+debug_mode = False
+
 class DB:
 
 	def __init__(self):
@@ -34,8 +36,6 @@ class DB:
 			self.transaction_status = {} # either 1 - commit or 0 - abort
 
 			self.write_to = defaultdict(list) # key: transaction, value: list of variables it writes to
-			# self.sites_down_history = [[] for i in range(1, self.num_of_sites + 1)]
-			# self.sites_recover_history = [[] for i range(1, self.num_of_sites + 1)]
 			self.sites_status_history = [[] for i in range(self.num_of_sites + 1)] # list of list of pairs (time, up/down)
 
 			# initialize sites_status_history
@@ -58,7 +58,9 @@ class DB:
 			for i in range(len(args)):
 				args[i] = args[i].strip()
 
-			print(name, args)
+			if debug_mode: 
+				print(name, args)
+
 			if name == "begin": 
 				assert len(args) == 1
 				self.begin(args[0], self.curr_time)
@@ -84,11 +86,18 @@ class DB:
 
 				# deadlock detection
 				t_abort = self.deadlock_detect()
-				print("transaction to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
+
+				if debug_mode:
+					print("transaction to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
+
 				if t_abort != None:
-					print("wait for edges before abort: ", self.waits_for)
+					if debug_mode: 
+						print("wait for edges before abort: ", self.waits_for)
+
 					self.abort(t_abort)
-					print("wait for edges after abort: ", self.waits_for)
+
+					if debug_mode:
+						print("wait for edges after abort: ", self.waits_for)
 					self.retry()
 
 				self.end(args[0]) # 
@@ -104,7 +113,8 @@ class DB:
 			elif name == "dump":
 				self.dump()
 			else:
-				print("Error: unknown command ", name)
+				if debug_mode:
+					print("Error: unknown command ", name)
 
 
 		def begin(self, transaction, time):
@@ -127,7 +137,6 @@ class DB:
 				for i in range(1, self.num_of_sites + 1):
 					site_to_access.append(i)
 			return site_to_access
-			# print("	site to access: ", site_to_access)
 
 		# handle write instruction
 		# Output: True - means succeeded, False - means failed, should wait
@@ -144,16 +153,20 @@ class DB:
 			# send write rquest to each site
 			is_waiting = False
 			for site in site_to_access:
-				print("lock table before write: ", self.sites[site].lock_table)
+				if debug_mode:
+					print("lock table before write: ", self.sites[site].lock_table)
 				response = self.sites[site].write(transaction, var, value)
-				print("lock table after write: ", self.sites[site].lock_table)
+				if debug_mode:
+					print("lock table after write: ", self.sites[site].lock_table)
 
 				if response == "success":
-					print("write %s = %d to site %d succeeded" %(var, value, site))
+					if debug_mode:
+						print("write %s = %d to site %d succeeded" %(var, value, site))
 					self.accessed_sites[transaction].append(site)
 					self.accessed_sites2[transaction][var].append(site)
 				elif response == "fail":
-					print("site %s is down, unable to write" % site)
+					if debug_mode:
+						print("site %s is down, unable to write" % site)
 				else:
 					is_waiting = True
 					break
@@ -174,7 +187,8 @@ class DB:
 				if not is_existed:
 					self.waiting.append(self.Instruction("write", [transaction, var, value]))
 					assert type(response) is list
-					print("%s should wait for %s" % (transaction, response))
+					if debug_mode:
+						print("%s should wait for %s" % (transaction, response))
 					for t in response:
 						self.waits_for.append((transaction, t)) # first waits for second
 				return False
@@ -188,15 +202,17 @@ class DB:
 				begin_time = self.start_time[transaction]
 
 				site_to_access = self.get_sites_to_access(var)
-				print("site to access: ", site_to_access)
-				print(begin_time)
+				if debug_mode:
+					print("site to access: ", site_to_access)
+					print(begin_time)
 
 				for site in site_to_access:
 					result = self.sites[site].read_only(var, begin_time, self.sites_status_history[site])
 					# print(result)
 
 					if result == "fail":
-						print("site %d is down, cannot read" % site)
+						if debug_mode:
+							print("site %d is down, cannot read" % site)
 					elif result != None:
 						print("%s - %s: %d" % (transaction, var, result))
 						self.accessed_sites[transaction].append(site)
@@ -211,7 +227,8 @@ class DB:
 			# odd: read from a site; even: try site one by one, return first 
 			site_to_access = self.get_sites_to_access(var)
 
-			print("site to access: ", site_to_access)
+			if debug_mode:
+				print("site to access: ", site_to_access)
 			needs_wait = False
 			for site in site_to_access:
 				result = self.sites[site].read(transaction, var)
@@ -227,7 +244,8 @@ class DB:
 			self.waiting.append(self.Instruction('read', [transaction, var]))
 			if needs_wait == True:
 				assert type(result) is list
-				print("%s should wait for %s" % (transaction, result))
+				if debug_mode:
+					print("%s should wait for %s" % (transaction, result))
 				for t in result:
 					self.waits_for.append((transaction, t))
 			return False
@@ -309,12 +327,14 @@ class DB:
 		# function: retry waiting commands recursivly
 		# when to use: when lock table is changed (locks are released or erased), 
 		def retry(self):
-			print("waiting command: ", self.waiting)
+			if debug_mode:
+				print("waiting command: ", self.waiting)
 			if len(self.waiting) == 0:
 				return
 
 			# determine which transaction's commands to try first: the one that doesn't wait for anyone
-			print("    waits for: ", self.waits_for)
+			if debug_mode:
+				print("    waits for: ", self.waits_for)
 			# adjlist = defaultdict(list)
 			# for edge in self.waits_for:
 			# 	adjlist[edge[0]].append(edge[1])
@@ -346,14 +366,17 @@ class DB:
 						break
 				if is_waiting == False:
 					commands_to_try.append(command)
-			print("    commands to try: ", commands_to_try)
+			if debug_mode:
+				print("    commands to try: ", commands_to_try)
 
 			for command in commands_to_try:
-				print("retry %s" % command)
+				if debug_mode:
+					print("retry %s" % command)
 				if command.type == "write":
 					assert len(command.args) == 3
 					result = self.write(command.args[0], command.args[1], command.args[2])
-					print("retry result: ", result)
+					if debug_mode:
+						print("retry result: ", result)
 					if result == True:
 						# update waiting command
 						self.waiting.remove(command)
@@ -423,7 +446,6 @@ class DB:
 				if visited[node] == False:
 					if self.isCyclicUtil(graph, node, visited, recStack) == True:
 						# find the youngest transaction to abort
-						# print("recStack: ", recStack)
 						max_start_time = 0
 						result = None
 						for i, val in recStack.items():
@@ -452,8 +474,9 @@ class DB:
 				vertices.add(node1)
 				vertices.add(node2)
 
-			print("graph:", graph)
-			print("num of vertices: ", vertices)
+			if debug_mode:
+				print("graph:", graph)
+				print("num of vertices: ", vertices)
 			return self.isCyclic(graph, vertices)
 
 
@@ -565,7 +588,8 @@ class DB:
 							self.curr_vals[x] = val
 							return "success"
 						# hold a read lock
-						print("    waiting list:", self.waiting_list[x])
+						if debug_mode:
+							print("    waiting list:", self.waiting_list[x])
 						if len(self.lock_table[x].transactions) == 1: # not a shared read lock
 							if not self.waiting_list[x]: # no other waiting
 								self.lock_table[x].type = self.WLOCK
@@ -633,7 +657,8 @@ class DB:
 				if x_idx % 2 == 1: # unreplicated variable
 					if self.status == self.UP:
 						history = self.commit_vals[var]
-						print("    history: ", history)
+						if debug_mode:
+							print("    history: ", history)
 						latest_commit = None
 						for commit in reversed(history): 
 							if commit[1] < begin_time:
@@ -646,7 +671,8 @@ class DB:
 
 				# replicated variable
 				history = self.commit_vals[var]
-				print("    history: ", history)
+				if debug_mode:
+					print("    history: ", history)
 
 				# find the lastest commit before begin_time
 				latest_commit = None
@@ -805,14 +831,10 @@ class DB:
 	def querystate(self):
 		print("\nTransaction Manager State:")
 		self.tm.print_state()
-		# print("Sites: ")
-		# for s in self.sites:
-		# 	s.print_state()
 
 
 def main():
 	in_file = sys.argv[1]
-	# out_file = sys.argv[2]
 	# create a DB
 	db = DB()
 
@@ -821,7 +843,7 @@ def main():
 	for line in f:
 		db.tm.read_in_instruction(line)
 
-	db.querystate()
+	# db.querystate()
 
 
 if __name__ == "__main__":
