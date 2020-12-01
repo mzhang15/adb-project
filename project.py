@@ -1,3 +1,6 @@
+# Author: the entire file is written by Mengyang Zhang
+# file updated on 12/01/2020
+
 from collections import defaultdict 
 import sys
 
@@ -17,7 +20,9 @@ class DB:
 		COMMIT = 1
 		ABORT = 0
 
-		# initialize TM: start time, end time, is site up array, is read-only array, waiting commands, wait for
+		# Description: initialize TM: start time, end time, is site up array, is read-only array, waiting commands, wait for
+		# Input: None
+		# Output: None
 		def __init__(self):
 			self.num_of_sites = 10
 			self.sites = [self.DM(i) for i in range(self.num_of_sites + 1)]
@@ -43,10 +48,13 @@ class DB:
 				self.sites_status_history[site].append((self.curr_time, self.UP))
 
 
+		# Description: read in instruction line by line, parse it, and call corresponding functions
+		# Input: a string line. e.g. "W(T1, x1, 10)"
+		# Output: None
+		# Side Effect: increment curr_time in TM
 		def read_in_instruction(self, line):
 			# increment time
 			self.curr_time += 1
-			# print(self.curr_time)
 
 			# parse instruction
 			l = line.index("(")
@@ -72,14 +80,6 @@ class DB:
 				self.read(args[0], args[1])
 			elif name == "W":
 				assert len(args) == 3
-
-				# no need to run deadlock detection before write
-				# t_abort = self.deadlock_detect()
-				# print("transaction to be aborted: ", t_abort) # deadlock detectionn happens at the beginning of the tick
-				# if t_abort != None:
-				# 	self.abort(t_abort)
-				# 	self.retry()
-
 				self.write(args[0], args[1], int(args[2]))
 			elif name == "end":
 				assert len(args) == 1
@@ -100,10 +100,11 @@ class DB:
 						print("wait for edges after abort: ", self.waits_for)
 					self.retry()
 
-				self.end(args[0]) # 
+				self.end(args[0]) 
 
 				# retry waiting commands
 				self.retry()
+
 			elif name == "fail":
 				assert len(args) == 1
 				self.fail(args[0])
@@ -116,18 +117,27 @@ class DB:
 				if debug_mode:
 					print("Error: unknown command ", name)
 
-
+		# Description: handle begin operation
+		# Input: transaction, current timestamp
+		# Output: None
+		# Side Effect: update TM's start_time and is_read_only lists
 		def begin(self, transaction, time):
 			# just record its begin time
 			self.start_time[transaction] = time
 			self.is_read_only[transaction] = False
 
+		# Description: handle beginRO operation
+		# Input: transaction, current timestamp
+		# Output: None
+		# Side effect: update TM's start_time and is_read_only lists
 		def beginRO(self, transaction, time):
 			self.start_time[transaction] = time
 			self.is_read_only[transaction] = True
 
-		# based on variable, return sites that have its copy
-		# output: a list of site numbers
+		# Description: based on variable, return sites that have its copy
+		# Input: variable
+		# Output: a list of sites
+		# Side effect: None
 		def get_sites_to_access(self, var):
 			site_to_access = []
 			x_idx = int(var[1:])
@@ -138,8 +148,10 @@ class DB:
 					site_to_access.append(i)
 			return site_to_access
 
-		# handle write instruction
-		# Output: True - means succeeded, False - means failed, should wait
+		# Description: handle write instruction
+		# Input: transaction it belongs to, variable it tries to write to, value it tries to assign to
+		# Output: True - succeeded, False - failed, should wait
+		# Side effect: update TM's member variables: write_to, accessed_sites, accessed_sites2, waiting, waits_for lists
 		def write(self, transaction, var, value):
 			self.write_to[transaction].append(var)
 
@@ -195,6 +207,10 @@ class DB:
 
 			return True
 
+		# Description: handle read instruction
+		# Input: transaction, variable it tries to read
+		# Output: True - succeeds and print value, False - faill;
+		# Side Effects: update TM's member variable: waiting, waits_for and accessed_sites lists
 		def read(self, transaction, var):
 			# read-only: return committed value on or before the transaction started
 			if self.is_read_only[transaction] == True:
@@ -250,6 +266,10 @@ class DB:
 					self.waits_for.append((transaction, t))
 			return False
 
+		# Description: handle fail operation
+		# Input: site 
+		# Output: None
+		# Side Effects: update TM's member variable sites_status_history, update corresponding site's status, abort transaction
 		def fail(self, site):
 			site = int(site)
 			# erase lock table + curr_vals?
@@ -263,15 +283,26 @@ class DB:
 					# self.transaction_status[t] = self.ABORT
 					# TODO: should revert all commands
 
+		# Description: handle recover instruction
+		# Input: site
+		# Output: None
+		# Side Effects: update corresponding site's status, update TM's sites_status_history
 		def recover(self, site):
 			self.sites[int(site)].recover()
 			self.sites_status_history[int(site)].append((self.curr_time, self.UP))
 
+		# Description: release locks that transaction t holds
+		# Input: transaction t
+		# Output: None
+		# Side Effects: corresponding sites' lock table and state
 		def release_locks(self, t):
 			for i in self.accessed_sites[t]:
 				self.sites[i].release_locks(t)
 
-		# print commit or abort
+		# Description: handle end operation
+		# Input: transaction t
+		# Output: print transaction commits or aborts
+		# Side Effects: sites' lock table, commit_vals and state, TM's transaction_status, waiting, and waits_for lists
 		def end(self, t):
 			# release locks
 			self.release_locks(t)
@@ -299,24 +330,26 @@ class DB:
 				if edge[1] == t:
 					self.waits_for.remove(edge)
 
-		# commit values that transaction has written to
+
+		# Description: commit values that transaction has written to
+		# Input: transaction
+		# Output: None
+		# Side Effects: update sites' curr_vals, commit_vals and other state
 		def commit_values(self, transaction):
 			# site_to_access = set()
 			var_been_written = self.write_to[transaction]
 
 			for var in var_been_written:
-				# sites_to_commit = self.get_sites_to_access(var)
 				sites_to_commit = self.accessed_sites2[transaction][var]
 
-				# filter out those sites that weren't accessed by this transaction
-				# for site in sites_to_commit.copy():
-				# 	if site not in self.accessed_sites[transaction]:
-				# 		sites_to_commit.remove(site)
-				# print("   sites to commit: ", sites_to_commit)
 				for site in sites_to_commit:
 					self.sites[site].commit_value(var, self.curr_time)
 
 
+		# Description: handle dump instruction
+		# Input: None
+		# Output: print variables and their values on each site
+		# Side Effects: None
 		def dump(self):
 			for i in range(1, self.num_of_sites + 1):
 				print("site %d" % i, end = " - ")
@@ -324,8 +357,11 @@ class DB:
 
 
 
-		# function: retry waiting commands recursivly
+		# Description: retry waiting commands recursivly
 		# when to use: when lock table is changed (locks are released or erased), 
+		# Input: None
+		# Ouput: None
+		# Side Effects: TM's waiting.
 		def retry(self):
 			if debug_mode:
 				print("waiting command: ", self.waiting)
@@ -335,28 +371,7 @@ class DB:
 			# determine which transaction's commands to try first: the one that doesn't wait for anyone
 			if debug_mode:
 				print("    waits for: ", self.waits_for)
-			# adjlist = defaultdict(list)
-			# for edge in self.waits_for:
-			# 	adjlist[edge[0]].append(edge[1])
-			# 	adjlist[edge[1]] = []
 
-			# transactions_to_try = []
-			# for key in adjlist:
-			# 	if not adjlist[key]: # empty
-			# 		transactions_to_try.append(key)
-			# print("transactions to try: ", transactions_to_try)
-
-			# commands_to_try = []
-			# if not transactions_to_try: # only left with transactions that aren't waiting for any
-			# 	commands_to_try = self.waiting
-			# else:
-			# 	for command in self.waiting:
-			# 		if command.args[0] in transactions_to_try:
-			# 			commands_to_try.append(command)
-
-			# print("commands to try: ", commands_to_try)
-
-			# select from waiting command, find which doesn't wait for anything
 			commands_to_try = []
 			for command in self.waiting:
 				is_waiting = False
@@ -390,11 +405,17 @@ class DB:
 						self.waiting.remove(command)
 						self.retry()
 
+		# Description: revert values associated with the given transaction to their last commit values on all related sites
+		# Input: transaction
+		# Output: None
+		# Side effects: curr_vals on sites
 		def revert_to_last_commit_val(self, transaction):
 			for site in self.accessed_sites[transaction]:
 				self.sites[site].revert_to_last_commit_value(transaction)
 
 		# Description: abort a transaction, release all locks it's holding, remove its waiting commands, and remove related waits-for edge
+		# Input: transaction
+		# Side effects: sites' state, TM's waits_for, transaction_status, waiting lists
 		def abort(self, transaction):
 			# revert back to last commit value
 			self.revert_to_last_commit_val(transaction)
@@ -413,11 +434,18 @@ class DB:
 
 			self.transaction_status[transaction] = self.ABORT # 0 means abort
 
+
 		############# DEADLOCK SESSION ###############
-		# The algorithm and code are cited from website GeeksforGeeks: Dectect Cycle in a Directed Graph
-		# link to the page is https://www.geeksforgeeks.org/detect-cycle-in-a-graph/
+		# The algorithm and code are taken from website GeeksforGeeks: Dectect Cycle in a Directed Graph
+		# and modified to suit for this project
+		# link to the article is https://www.geeksforgeeks.org/detect-cycle-in-a-graph/
 
 		# TODO: create a dead lock detector class
+
+		# Description: helper function of isCyclic, determine if there is a cycle when DFS iterates to v
+		# Input: graph, visited, recStack, v
+		# Output: if there is a cycle
+		# Side Effects: visited, recStack
 		def isCyclicUtil(self, graph, v, visited, recStack):
 			visited[v] = True
 			recStack[v] = True
@@ -432,8 +460,10 @@ class DB:
 			recStack[v] = False
 			return False
 
-		# return the transaction to be aborted if there is a cycle or 
+		# Description: return the transaction to be aborted if there is a cycle or 
 		# none if there is no cycle
+		# Input: graph(in adjacent list form), list of vertices
+		# Output: True - if there is a cyle, False - not
 		def isCyclic(self, graph, vertices):
 			visited = {}
 			recStack = {}
@@ -461,8 +491,9 @@ class DB:
 
 
 		# Detect if there is a deadlock
-		# input: a list of wait-for edges
+		# Input: a list of wait-for edges
 		# output: transaction to be aborted
+		# Side Effects: None
 		def deadlock_detect(self):
 			# construct adjlist 
 			graph = defaultdict(list)
@@ -484,7 +515,10 @@ class DB:
 		
 
 
-
+		# Description: print state of TM and all sites
+		# Input: None
+		# Output: print sites to the console
+		# Side Effects: None
 		def print_state(self):
 			print("start time: ", self.start_time)
 			print("is read only: ", self.is_read_only)
@@ -509,6 +543,7 @@ class DB:
 			def __str__(self):
 				return "%s(%s)" % (self.type, self.args)
 
+		# Data Manager Module
 		class DM:
 
 			RLOCK = 0
@@ -518,7 +553,6 @@ class DB:
 			UP = 1
 			RECOVER = 2
 
-			# TODO: creat lock class and acqure and release method
 			class LOCK:
 				def __init__(self, type, transaction):
 					self.type = type
@@ -526,19 +560,15 @@ class DB:
 
 					self.transactions.add(transaction)
 
-				# def acqure(self, transaction):
-				# 	if self.type == WLOCK:
-				# 		if not self.transactions:
-				# 			self.transactions.add(transaction)
-				# 			return True
-				# 		return False
-				# 	elif self.type == RLOCK:
 				def __repr__(self):
 					return "%s(%s)" % (self.type, self.transactions)
 
 				def __str__(self):
 					return "%s(%s)" % (self.type, self.transactions)
 
+			# Description: initialize the state of this site
+			# Input: site number
+			# Output: None
 			def __init__(self, site_no):
 				self.number = site_no
 				self.status = self.UP
@@ -559,11 +589,19 @@ class DB:
 						if i % 2 == 0:
 							self.is_just_recovered[var] = False
 
+			# Description: handle fail request from TM
+			# Input: None
+			# Output: None
+			# Side Effects: site's status, lock table, and waiting_list
 			def fail(self):
 				self.status = self.DOWN
 				self.lock_table.clear()
 				self.waiting_list.clear()
 
+			# Description: handle recover request coming from the TM
+			# Input: None
+			# Output: None
+			# Side Effects: site's status, is_just_recovered array
 			def recover(self):
 				self.status = self.RECOVER
 
@@ -572,9 +610,10 @@ class DB:
 
 
 
-			# handle write request
-			# TODO: change site's status from recover to up after a successful write
+			# Description: handle write request from the TM
+			# Input: transaction, variable x, value val
 			# Output: "fail" - site is down, "success" - write succeeded, or list of conflictinng transaction
+			# Side Effects: site's lock table, curr_vals, waiting_list
 			def write(self, transaction, x, val):
 				# if site is up or recovered, write request can proceed
 				if self.status == self.DOWN:
@@ -643,14 +682,20 @@ class DB:
 				self.curr_vals[x] = val
 				return "success"
 
+			# Description: infer conflicting transaction from waiting locks
+			# Input: variable var
+			# Output: list of conflicting transactions
+			# Side Effects: None
 			def infer_conflicts_from_waiting_locks(self, var):
 				conflict_transactions = []
 				for lock in self.waiting_list[var]:
 					conflict_transactions.extend(lock.transactions)
 				return conflict_transactions
 
+			# Description: handle read_only request from the TM
 			# Input: transaction begin time, site status history
 			# Output: "fail" - site is down or no valid value, value - if succeeded (guranteed to return one)
+			# Site Effects: None
 			def read_only(self, var, begin_time, site_status_history):
 				x_idx = int(var[1:])
 
@@ -696,8 +741,10 @@ class DB:
 					return latest_commit_value
 				return "fail"
 
-			# handle recover cases
+			# Description: handle read request sent from the TM, handle the recover cases
+			# Input: transaction, variable var
 			# Output: "fail" - site is down or var just recovered, value - if succeeded, or list of conflicting transactions
+			# Site Effects: None
 			def read(self, transaction, var):
 				if self.status == self.DOWN:
 					return "fail"
@@ -715,6 +762,10 @@ class DB:
 				return self.read_helper(transaction, var)
 
 
+			# Description: handle the read operation
+			# Input: transaction, variable
+			# Output: value or list of conflicting transactions
+			# Side Effects: site's lock table, waiting_list
 			def read_helper(self, transaction, var):
 				if var not in self.lock_table: # no lock on var -> acqure RLOCK
 					self.lock_table[var] = (self.LOCK(self.RLOCK, transaction))
@@ -752,7 +803,10 @@ class DB:
 
 				return conflict_transactions
 
-			
+			# Description: print state of this site
+			# Input: None
+			# Output: print state of this site
+			# Side Effects: None
 			def print_state(self):
 				print("    status: ", self.status)
 				print("    curr_vals: ", self.curr_vals)
@@ -761,6 +815,10 @@ class DB:
 				print("    is just recovered: ", self.is_just_recovered)
 
 
+			# Description: release locks acquired by the given transaction
+			# Input: transaction
+			# Output: None
+			# Side Effects: lock table
 			def release_locks(self, transaction):
 				# release locks
 				for var, lock in self.lock_table.copy().items():
@@ -771,12 +829,20 @@ class DB:
 				# todo: update waiting_list
 
 
+			# Description: revert to last commit values that transaction has written to
+			# Input: transaction
+			# Output: None
+			# Side Effects: current values
 			def revert_to_last_commit_value(self, transaction):
 				for var, lock in self.lock_table.items():
 					if transaction in lock.transactions and lock.type == self.WLOCK:
 						self.curr_vals[var] = self.commit_vals[var][-1][0]
 
-			# commit a specific variable at time t 
+			
+			# Description: commit a specifc variable at time t
+			# Input: variable var, time
+			# Output: None 
+			# Side Effects: committed values, site status
 			def commit_value(self, var, time):
 				self.commit_vals[var].append((self.curr_vals[var], time))
 				# self.curr_vals.pop(var) # Q: do i need to clear the curr value?
@@ -793,40 +859,15 @@ class DB:
 				if is_all_variables_recovered:
 					self.status = self.UP
 
-			# no longer use
-			def commit_values(self, time):
-				for variable, val in self.curr_vals.items():
-					self.commit_vals[variable].append((val, time))
-
-					# handle recover case
-					if variable in self.is_just_recovered and self.is_just_recovered[variable] == True:
-						self.is_just_recovered[variable] == False;
-
-				self.curr_vals.clear()
-
-				# if all replicated variables have a commit after the site recovers -> change site's status to UP
-				is_all_variables_recovered = True
-				for var, status in self.is_just_recovered.items():
-					if status == True:
-						is_all_variables_recovered = False
-						break
-				if is_all_variables_recovered:
-					self.status = self.UP
-
+			# Description: print committed values of all variables on this site
+			# Input: None
+			# Output: None
+			# Side Effects: None
 			def print_commit_vals(self):
 				for var in self.commit_vals:
 					print ("%s: %d," % (var, self.commit_vals[var][-1][0]), end = " ")
 				print("\n")
 
-		# initialize variables' values
-		# def initialize():
-
-	# def fail(site):
-		# erase lock table + curr_vals?
-
-		# check if a transactionn has accessed this site, if so, abort it right away
-
-	# def recover(site):
 
 	def querystate(self):
 		print("\nTransaction Manager State:")
