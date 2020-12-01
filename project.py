@@ -79,26 +79,19 @@ class DB:
 				assert len(args) == 1
 
 				# deadlock detection
-				# t_abort = self.deadlock_detect()
-				# print("transactions to be aborted: ", self.deadlock_detect()) # deadlock detectionn happens at the beginning of the tick
-				# if t_abort != None:
-				# 	print("wait for edges before abort: ", self.waits_for)
-				# 	self.abort(t_abort)
-				# 	print("wait for edges after abort: ", self.waits_for)
-				# 	self.retry()
-
 				to_abort_transactions = self.deadlock_detect()
 				print("transactions to be aborted: ", to_abort_transactions)  # deadlock detectionn happens at the beginning of the tick
 
-				for t_abort in to_abort_transactions:
-					print("transaction to be aborted: ", t_abort)
-					if t_abort != None:
-						print("wait for edges before abort: ", self.waits_for)
-						self.abort(t_abort)
-						print("wait for edges after abort: ", self.waits_for)
+				if len(to_abort_transaction) > 0:
+					for t_abort in to_abort_transactions:
+						print("transaction to be aborted: ", t_abort)
+						if t_abort != None:
+							print("wait for edges before abort: ", self.waits_for)
+							self.abort(t_abort)
+							print("wait for edges after abort: ", self.waits_for)
 
-				# retry after aborting youngest from each cycle
-				self.retry()
+					# retry after aborting youngest from each cycle
+					self.retry()
 
 				self.end(args[0])
 
