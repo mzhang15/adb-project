@@ -1,0 +1,6 @@
+fail(2)
+beginRO(T1)
+R(T1, x1)
+dump()
+// test RO transaction reads unreplicated variable; the site is down before the transaction begins ()
+// R should wait ()

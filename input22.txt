@@ -1,0 +1,8 @@
+beginRO(T1)
+fail(2)
+R(T1,x1)
+dump()
+// test RO transaction to read unreplicated variable; the site fails after the transaction begins ()
+// T1 cannot read x1 from site 2 because the site is down ()
+
+

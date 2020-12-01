@@ -631,57 +631,44 @@ class DB:
 				x_idx = int(var[1:])
 
 				if x_idx % 2 == 1: # unreplicated variable
-					# check if site is up at begin_time: find the last time < begin_time 
-					status_at_begin_time = None
-					for time, status in reversed(site_status_history):
-						if time < begin_time:
-							status_at_begin_time = status
-							break
-
-					assert status_at_begin_time != None # initialize site is up at time 0
-					if status_at_begin_time == self.DOWN:
-						return "fail"
-
-					# site was up -> Q: read the lastest value or curr value?
-					return self.curr_vals[var]
-
-				if x_idx % 2 == 0: # replicated variable
-					history = self.commit_vals[var]
-					print("    history: ", history)
-
-					# find the lastest commit before begin_time
-					latest_commit = None
-					for commit in reversed(history): 
-						if commit[1] < begin_time:
-							latest_commit = commit
-							break
-					assert latest_commit != None
-
-					latest_commit_time = latest_commit[1]
-					latest_commit_value = latest_commit[0]
-
-					# check if the site is up between latest_commit_time and begin_time
-					# in other words, no down history in this history
-					is_up_all_time = True
-					for time, status in site_status_history:
-						if latest_commit_time < time and time < begin_time and status == self.DOWN:
-							is_up_all_time = False
-							break
-					if is_up_all_time == True:
-						return latest_commit_value
+					if self.status == self.UP:
+						history = self.commit_vals[var]
+						print("    history: ", history)
+						latest_commit = None
+						for commit in reversed(history): 
+							if commit[1] < begin_time:
+								latest_commit = commit
+								break
+						assert latest_commit != None
+						return latest_commit[0]
 					return "fail"
+				
 
-				# if self.status == self.DOWN:
-				# 	return "fail"
+				# replicated variable
+				history = self.commit_vals[var]
+				print("    history: ", history)
 
-				# history = self.commit_vals[var]
-				# print("history: ", history)
+				# find the lastest commit before begin_time
+				latest_commit = None
+				for commit in reversed(history): 
+					if commit[1] < begin_time:
+						latest_commit = commit
+						break
+				assert latest_commit != None
 
-				# # return the lastest val: last val in the list whose commit time is < begin_time
-				# for i in range(len(history)):
-				# 	if history[i][1] < begin_time:
-				# 		if i == len(history) - 1 or history[i + 1][1] > begin_time:
-				# 			return history[i][0]
+				latest_commit_time = latest_commit[1]
+				latest_commit_value = latest_commit[0]
+
+				# check if the site is up between latest_commit_time and begin_time
+				# in other words, no down history in this history
+				is_up_all_time = True
+				for time, status in site_status_history:
+					if latest_commit_time < time and time < begin_time and status == self.DOWN:
+						is_up_all_time = False
+						break
+				if is_up_all_time == True:
+					return latest_commit_value
+				return "fail"
 
 			# handle recover cases
 			# Output: "fail" - site is down or var just recovered, value - if succeeded, or list of conflicting transactions
