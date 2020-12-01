@@ -27,6 +27,7 @@ class DB:
 			self.is_read_only = {} # key: transaction, value: True/False
 			self.waiting = [] # accumulate waiting command
 			self.waits_for = [] # wait-for edges, used for deadlock detection
+			# TODO: change accessed_sites to be a dict of dict: outerkey - transaction innerkey: var value: list of sites a var has accessed
 			self.accessed_sites = defaultdict(list) # key: transaction, value: list of sites a transaction has accessed
 			self.transaction_status = {} # either 1 - commit or 0 - abort
 
@@ -44,6 +45,10 @@ class DB:
 			r = line.index(")")
 			name = line[0:l]
 			args = line[l + 1:r].split(",")
+
+			# get rid of white space of each argument
+			for i in range(len(args)):
+				args[i] = args[i].strip()
 
 			print(name, args)
 			if name == "begin": 
@@ -256,7 +261,7 @@ class DB:
 
 			# updates waits-for edges: delete any edge that has other transactions wait for this transaction
 			# Assumption: this transaction shouldnn't wait for any other transaction when it commits
-			for edge in self.waits_for:
+			for edge in self.waits_for.copy():
 				assert edge[0] != t
 				if edge[1] == t:
 					self.waits_for.remove(edge)
@@ -268,9 +273,14 @@ class DB:
 
 			for var in var_been_written:
 				# site_to_access.update(self.get_sites_to_access(var))
-				site_to_access = self.get_sites_to_access(var)
+				sites_to_commit = self.get_sites_to_access(var)
 
-				for site in site_to_access:
+				# filter out those sites that weren't accessed by this transaction
+				# for site in sites_to_commit.copy():
+				# 	if site not in self.accessed_sites[transaction]:
+				# 		sites_to_commit.remove(site)
+				# print("   sites to commit: ", sites_to_commit)
+				for site in sites_to_commit:
 					self.sites[site].commit_value(var, self.curr_time)
 
 
@@ -289,29 +299,39 @@ class DB:
 				return
 
 			# determine which transaction's commands to try first: the one that doesn't wait for anyone
-			# Q: should I find all transactions that could try?
 			print("    waits for: ", self.waits_for)
-			adjlist = defaultdict(list)
-			for edge in self.waits_for:
-				adjlist[edge[0]].append(edge[1])
-				adjlist[edge[1]] = []
+			# adjlist = defaultdict(list)
+			# for edge in self.waits_for:
+			# 	adjlist[edge[0]].append(edge[1])
+			# 	adjlist[edge[1]] = []
 
-			transactions_to_try = []
-			for key in adjlist:
-				if not adjlist[key]: # empty
-					transactions_to_try.append(key)
-			print("transactions to try: ", transactions_to_try)
+			# transactions_to_try = []
+			# for key in adjlist:
+			# 	if not adjlist[key]: # empty
+			# 		transactions_to_try.append(key)
+			# print("transactions to try: ", transactions_to_try)
 
+			# commands_to_try = []
+			# if not transactions_to_try: # only left with transactions that aren't waiting for any
+			# 	commands_to_try = self.waiting
+			# else:
+			# 	for command in self.waiting:
+			# 		if command.args[0] in transactions_to_try:
+			# 			commands_to_try.append(command)
+
+			# print("commands to try: ", commands_to_try)
+
+			# select from waiting command, find which doesn't wait for anything
 			commands_to_try = []
-			if not transactions_to_try: # only left with transactions that aren't waiting for any
-				commands_to_try = self.waiting
-			else:
-				for command in self.waiting:
-					if command.args[0] in transactions_to_try:
-						commands_to_try.append(command)
-
-			print("commands to try: ", commands_to_try)
-
+			for command in self.waiting:
+				is_waiting = False
+				for edge in self.waits_for:
+					if command.args[0] == edge[0]: # this command's transaction is waiting for other transaction
+						is_waiting = True
+						break
+				if is_waiting == False:
+					commands_to_try.append(command)
+			print("    commands to try: ", commands_to_try)
 
 			for command in commands_to_try:
 				print("retry %s" % command)
@@ -324,6 +344,7 @@ class DB:
 						self.waiting.remove(command)
 						# retry next command
 						self.retry()
+					return
 				elif command.type == "read":
 					assert len(command.args) == 2
 					result = self.read(command.args[0], command.args[1])
@@ -526,6 +547,22 @@ class DB:
 							self.curr_vals[x] = val
 							return "success"
 						# hold a read lock
+						print("    waiting list:", self.waiting_list[x])
+						if len(self.lock_table[x].transactions) == 1: # not a shared read lock
+							if not self.waiting_list[x]: # no other waiting
+								self.lock_table[x].type = self.WLOCK
+								self.curr_vals[x] = val
+								return "success"
+
+							# there is waiting locks
+
+							# if current transaction is the first one in the waiting queue -> promote RLOCK to WLOCK and delete from waiting list
+							if self.waiting_list[x][0].type == self.WLOCK and transaction in self.waiting_list[x][0].transactions:
+								self.waiting_list[x].pop(0) # remove it from the waiting list
+								self.lock_table[x].type = self.WLOCK
+								self.curr_vals[x] = val
+								return "success"
+
 						if not self.waiting_list[x] and len(self.lock_table[x].transactions) == 1: # not a shared lock
 							# promote lock and proceed
 							self.lock_table[x].type = self.WLOCK
